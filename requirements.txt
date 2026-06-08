@@ -1,0 +1,19 @@
+# Core pipeline (main.py)
+torch
+torchvision
+numpy
+opencv-python
+pillow
+
+# C++ FastTracker build (FastTracker/setup.py)
+pybind11
+
+# ONNX export / conversion (pth2onnx.py, onnx2trt.py)
+onnx
+onnxsim
+
+# NOTE: TensorRT must be installed separately to match your CUDA / platform
+# (e.g. via the NVIDIA pip index or the TensorRT tarball):
+#   pip install tensorrt
+# Also requires Eigen3 headers for the FastTracker build:
+#   sudo apt install libeigen3-dev

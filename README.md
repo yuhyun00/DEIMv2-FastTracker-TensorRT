@@ -19,7 +19,7 @@ RGB image → preprocess → DEIMv2 TensorRT inference → (optional) FastTracke
 
 ```
 DEIMv2-FastTracker-TensorRT/
-├── main.py            # pipeline class + visualization function + main()
+├── detection.py       # pipeline class + visualization function + main()
 ├── pth2onnx.py        # DEIMv2 .pth -> .onnx
 ├── onnx2trt.py        # .onnx -> .engine (TensorRT)
 ├── requirements.txt
@@ -78,14 +78,14 @@ visualized results to the output folder.
 
 ```bash
 # detection + tracking
-python3 main.py \
+python3 detection.py \
     --input ./images --output ./results \
     --trt ./deimv2_s.engine --size 640 --model-size s \
     --track --conf 0.4 0.5 0.3 \
     --names person,bike,car
 
 # detection only (tracking disabled)
-python3 main.py -i ./images -o ./results -trt ./deimv2_s.engine -s 640 -ms s --conf 0.4 0.5 0.3
+python3 detection.py -i ./images -o ./results -trt ./deimv2_s.engine -s 640 -ms s --conf 0.4 0.5 0.3
 ```
 
 #### Main arguments
@@ -109,11 +109,11 @@ python3 main.py -i ./images -o ./results -trt ./deimv2_s.engine -s 640 -ms s --c
 
 ## Python API
 
-You can also use the `DEIMv2FastTracker` class from `main.py` directly.
+You can also use the `DEIMv2FastTracker` class from `detection.py` directly.
 
 ```python
 import cv2
-from main import DEIMv2FastTracker, visualize
+from detection import DEIMv2FastTracker, visualize
 
 pipe = DEIMv2FastTracker(
     engine_path="deimv2_s.engine",

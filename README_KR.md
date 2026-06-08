@@ -19,7 +19,7 @@ RGB 이미지 → 전처리 → DEIMv2 TensorRT 추론 → (옵션) FastTracker 
 
 ```
 DEIMv2-FastTracker-TensorRT/
-├── main.py            # 파이프라인 클래스 + 시각화 함수 + main()
+├── detection.py       # 파이프라인 클래스 + 시각화 함수 + main()
 ├── pth2onnx.py        # DEIMv2 .pth -> .onnx
 ├── onnx2trt.py        # .onnx -> .engine (TensorRT)
 ├── requirements.txt
@@ -75,14 +75,14 @@ python3 onnx2trt.py --onnx deimv2_s.onnx --saveEngine deimv2_s.engine --fp16 --s
 
 ```bash
 # 검출 + 추적
-python3 main.py \
+python3 detection.py \
     --input ./images --output ./results \
     --trt ./deimv2_s.engine --size 640 --model-size s \
     --track --conf 0.4 0.5 0.3 \
     --names person,bike,car
 
 # 검출만 (추적 비활성화)
-python3 main.py -i ./images -o ./results -trt ./deimv2_s.engine -s 640 -ms s --conf 0.4 0.5 0.3
+python3 detection.py -i ./images -o ./results -trt ./deimv2_s.engine -s 640 -ms s --conf 0.4 0.5 0.3
 ```
 
 #### 주요 인자
@@ -106,11 +106,11 @@ python3 main.py -i ./images -o ./results -trt ./deimv2_s.engine -s 640 -ms s --c
 
 ## Python API
 
-`main.py`의 `DEIMv2FastTracker` 클래스를 직접 사용할 수도 있습니다.
+`detection.py`의 `DEIMv2FastTracker` 클래스를 직접 사용할 수도 있습니다.
 
 ```python
 import cv2
-from main import DEIMv2FastTracker, visualize
+from detection import DEIMv2FastTracker, visualize
 
 pipe = DEIMv2FastTracker(
     engine_path="deimv2_s.engine",

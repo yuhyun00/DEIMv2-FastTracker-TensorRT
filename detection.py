@@ -10,7 +10,7 @@ is a separate, standalone function. `main()` globs an input folder, runs the
 pipeline on each image, and saves the visualized results.
 
 Example:
-    python3 main.py \
+    python3 detection.py \
         --input ./images --output ./results \
         --trt ./deimv2_s.engine --size 640 --model-size s \
         --track --conf 0.4 0.5 0.3 \

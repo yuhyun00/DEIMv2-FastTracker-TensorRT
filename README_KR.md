@@ -20,8 +20,9 @@ RGB 이미지 → 전처리 → DEIMv2 TensorRT 추론 → (옵션) FastTracker 
 ```
 DEIMv2-FastTracker-TensorRT/
 ├── detection.py       # 파이프라인 클래스 + 시각화 함수 + main()
-├── pth2onnx.py        # DEIMv2 .pth -> .onnx
-├── onnx2trt.py        # .onnx -> .engine (TensorRT)
+├── export/
+│   ├── pth2onnx.py    # DEIMv2 .pth -> .onnx
+│   └── onnx2trt.py    # .onnx -> .engine (TensorRT)
 ├── requirements.txt
 └── FastTracker/       # C++ 트래커 + pybind11 바인딩
     ├── include/  FastTracker.h, STrack.h, kalmanFilter.h, dataType.h, lapjv.h
@@ -59,14 +60,14 @@ Eigen이 표준 경로에 없으면 `EIGEN_INCLUDE_DIR` 환경변수로 `Eigen/`
 ### 1. 모델 변환 (.pth → .onnx → .engine)
 
 ONNX 내보내기는 **DEIMv2 레포 내부**에서 실행해야 합니다 (`engine.core.YAMLConfig`, `.deploy()` 필요).
-`pth2onnx.py`를 DEIMv2 레포 루트로 복사한 뒤 실행하세요.
+`export/pth2onnx.py`를 DEIMv2 레포 루트로 복사한 뒤 실행하세요.
 
 ```bash
 # (DEIMv2 레포 안에서) pth -> onnx
 python pth2onnx.py -c configs/deimv2/deimv2_dinov3_s_coco.yml -r deimv2_s.pth --check --simplify
 
 # onnx -> tensorrt engine
-python3 onnx2trt.py --onnx deimv2_s.onnx --saveEngine deimv2_s.engine --fp16 --size 640
+python3 export/onnx2trt.py --onnx deimv2_s.onnx --saveEngine deimv2_s.engine --fp16 --size 640
 ```
 
 ### 2. 파이프라인 실행
@@ -93,7 +94,7 @@ python3 detection.py -i ./images -o ./results -trt ./deimv2_s.engine -s 640 -ms 
 | `-o, --output` | 결과 저장 폴더 |
 | `-trt, --trt` | TensorRT 엔진(`.engine`) 경로 |
 | `--track` | FastTracker 추적 활성화 (생략 시 검출만) |
-| `--conf` | 클래스별 confidence threshold 리스트 (인덱스 = class id) |
+| `--conf` | confidence threshold: 값이 1개면 전체 클래스 공통, 여러 개면 클래스별 (인덱스 = class id) |
 | `-s, --size` | 모델 입력 크기 (예: 640) |
 | `-ms, --model-size` | `atto/femto/pico/n/s/m/l/x` (정규화 적용 여부 결정) |
 | `--names` | 클래스 이름 (콤마 구분 문자열 또는 파일, 1줄당 1개) |
@@ -101,8 +102,9 @@ python3 detection.py -i ./images -o ./results -trt ./deimv2_s.engine -s 640 -ms 
 | `--track-buffer` | lost track 유지 프레임 수 (기본 30) |
 | `--frame-rate` | 입력 프레임레이트 (기본 30) |
 
-> `--conf`는 인덱스가 class id에 대응합니다. 예: `--conf 0.4 0.5 0.3` → class 0은 0.4, class 1은 0.5, class 2는 0.3.
-> 리스트에 없는 class id는 마지막 값을 사용합니다. 추적 사용 시에도 confidence는 추적 **이후**, 최종 출력 직전에 적용됩니다.
+> `--conf`는 값을 1개 이상 받습니다. **1개**면 전체 클래스에 공통 threshold로 적용됩니다 (예: `--conf 0.4`).
+> **여러 개**면 인덱스가 class id에 대응합니다: `--conf 0.4 0.5 0.3` → class 0은 0.4, class 1은 0.5, class 2는 0.3 (리스트에 없는 class id는 마지막 값 사용).
+> 추적 사용 시에도 confidence는 추적 **이후**, 최종 출력 직전에 적용됩니다.
 
 ## Python API
 

@@ -20,8 +20,9 @@ RGB image → preprocess → DEIMv2 TensorRT inference → (optional) FastTracke
 ```
 DEIMv2-FastTracker-TensorRT/
 ├── detection.py       # pipeline class + visualization function + main()
-├── pth2onnx.py        # DEIMv2 .pth -> .onnx
-├── onnx2trt.py        # .onnx -> .engine (TensorRT)
+├── export/
+│   ├── pth2onnx.py    # DEIMv2 .pth -> .onnx
+│   └── onnx2trt.py    # .onnx -> .engine (TensorRT)
 ├── requirements.txt
 └── FastTracker/       # C++ tracker + pybind11 bindings
     ├── include/  FastTracker.h, STrack.h, kalmanFilter.h, dataType.h, lapjv.h
@@ -60,15 +61,15 @@ to the directory that contains the `Eigen/` folder.
 ### 1. Model conversion (.pth → .onnx → .engine)
 
 ONNX export must be run **from inside the DEIMv2 repository** (it needs
-`engine.core.YAMLConfig` and the `.deploy()` methods). Copy `pth2onnx.py` into the
-DEIMv2 repo root, then run it.
+`engine.core.YAMLConfig` and the `.deploy()` methods). Copy `export/pth2onnx.py` into
+the DEIMv2 repo root, then run it.
 
 ```bash
 # (inside the DEIMv2 repo) pth -> onnx
 python pth2onnx.py -c configs/deimv2/deimv2_dinov3_s_coco.yml -r deimv2_s.pth --check --simplify
 
 # onnx -> tensorrt engine
-python3 onnx2trt.py --onnx deimv2_s.onnx --saveEngine deimv2_s.engine --fp16 --size 640
+python3 export/onnx2trt.py --onnx deimv2_s.onnx --saveEngine deimv2_s.engine --fp16 --size 640
 ```
 
 ### 2. Run the pipeline
@@ -96,7 +97,7 @@ python3 detection.py -i ./images -o ./results -trt ./deimv2_s.engine -s 640 -ms 
 | `-o, --output` | folder to save results |
 | `-trt, --trt` | path to the TensorRT engine (`.engine`) |
 | `--track` | enable FastTracker tracking (detection only if omitted) |
-| `--conf` | per-class confidence thresholds (list index = class id) |
+| `--conf` | confidence threshold(s): a single value is global, multiple values are per-class (index = class id) |
 | `-s, --size` | model input size (e.g. 640) |
 | `-ms, --model-size` | `atto/femto/pico/n/s/m/l/x` (decides whether normalization is applied) |
 | `--names` | class names (comma-separated string or a file, one name per line) |
@@ -104,8 +105,9 @@ python3 detection.py -i ./images -o ./results -trt ./deimv2_s.engine -s 640 -ms 
 | `--track-buffer` | frames a lost track survives (default 30) |
 | `--frame-rate` | input frame rate (default 30) |
 
-> `--conf` is indexed by class id. Example: `--conf 0.4 0.5 0.3` → class 0 uses 0.4, class 1 uses 0.5, class 2 uses 0.3.
-> Class ids beyond the list fall back to the last value. Even with tracking enabled, the confidence threshold is applied **after** tracking, right before the final output.
+> `--conf` accepts one or more values. A **single** value is applied as a global threshold to all classes (e.g. `--conf 0.4`).
+> **Multiple** values are indexed by class id: `--conf 0.4 0.5 0.3` → class 0 uses 0.4, class 1 uses 0.5, class 2 uses 0.3 (class ids beyond the list fall back to the last value).
+> Even with tracking enabled, the confidence threshold is applied **after** tracking, right before the final output.
 
 ## Python API
 

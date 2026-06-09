@@ -194,18 +194,25 @@ class DEIMv2FastTracker:
     # ---- 4) per-class confidence threshold -------------------------------- #
     @staticmethod
     def apply_class_conf(arr, class_conf):
-        """Keep rows whose score >= class_conf[class_id].
+        """Keep rows whose score >= the threshold for their class.
 
-        class_conf is a list indexed by class id. Classes without an entry use
-        the last value as a fallback. If class_conf is None, nothing is filtered.
+        class_conf is a list of thresholds:
+          - a single value applies that threshold to all classes (global);
+          - multiple values are indexed by class id; class ids beyond the list
+            fall back to the last value.
+        If class_conf is None, nothing is filtered.
         """
         if class_conf is None or len(arr) == 0:
             return arr
         class_conf = np.asarray(class_conf, dtype=np.float32)
-        cls = arr[:, CLASS].astype(int)
-        # Clamp class ids that fall outside the provided list to the last threshold.
-        idx = np.clip(cls, 0, len(class_conf) - 1)
-        thr = class_conf[idx]
+        if class_conf.size == 1:
+            # Single value -> global threshold for every class.
+            thr = class_conf[0]
+        else:
+            cls = arr[:, CLASS].astype(int)
+            # Clamp class ids that fall outside the provided list to the last threshold.
+            idx = np.clip(cls, 0, len(class_conf) - 1)
+            thr = class_conf[idx]
         keep = arr[:, SCORE] >= thr
         return arr[keep]
 
@@ -305,7 +312,8 @@ def main():
     parser.add_argument("-trt", "--trt", required=True, help="path to the TensorRT engine (.engine)")
     parser.add_argument("--track", action="store_true", help="enable FastTracker tracking")
     parser.add_argument("--conf", type=float, nargs="+", default=None,
-                        help="per-class confidence thresholds (index = class id)")
+                        help="confidence threshold(s); a single value is global, "
+                             "multiple values are per-class (index = class id)")
     parser.add_argument("-s", "--size", type=int, required=True, help="model input size, e.g. 640")
     parser.add_argument("-ms", "--model-size", required=True,
                         choices=["atto", "femto", "pico", "n", "s", "m", "l", "x"])

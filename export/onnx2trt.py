@@ -13,10 +13,16 @@ are avoided here so the engine matches the ONNX/PyTorch outputs:
     mean but large, input-dependent max error. We clear BuilderFlag.TF32 to get
     true FP32 (bit-exact with ONNX-Runtime). Pass --keep-tf32 to reproduce the bug.
 
-  * FP16 case -- plain FP16 is catastrophic (cosine ~0.91): the attention Softmax
-    logits are large and exp() overflows in FP16, corrupting the whole output.
-    We keep the Softmax (and LayerNorm) layers in FP32 inside the FP16 engine
-    (cosine ~0.9999 at FP16 speed). Pass --no-mixed to reproduce the bug.
+  * FP16 case -- plain FP16 is catastrophic (cosine ~0.91). Two transformer ops
+    overflow FP16 and must stay FP32; which one appears depends on how the ONNX
+    was exported, so we guard both:
+      - Softmax: attention logits are large and exp() saturates to inf. This is
+        the decisive one on opset>=17 exports (measured: Softmax->FP32 alone
+        recovers cosine 0.91 -> 0.9999; LayerNorm->FP32 alone does nothing).
+      - LayerNorm: the variance x^2 overflows FP16 after attention. On opset>=17
+        it is fused into a single Normalization layer; on opset<=16 it is
+        decomposed into Reduce + Pow, so we force Normalization, Reduce and Pow.
+    Pass --no-mixed to reproduce the broken result.
 
 Example:
     # Accurate FP32 (TF32 disabled):
@@ -32,10 +38,40 @@ import argparse
 import tensorrt as trt
 
 # Layer types kept in FP32 inside an FP16 engine for the DINOv3/ViT backbone.
-# SOFTMAX is the essential one (attention exp() overflow); NORMALIZATION is added
-# so TensorRT can schedule the FP32 attention region with fewer FP16<->FP32
-# reformats (usually as fast or faster, and slightly more accurate).
-FP16_SENSITIVE = {"SOFTMAX", "NORMALIZATION"}
+# SOFTMAX is the decisive one (attention exp() overflow). NORMALIZATION is the
+# fused LayerNorm (opset>=17); REDUCE covers the decomposed LayerNorm variance
+# (opset<=16). POW is the decomposed square and is matched separately below.
+FP16_SENSITIVE_TYPES = {
+    trt.LayerType.SOFTMAX,
+    trt.LayerType.NORMALIZATION,
+    trt.LayerType.REDUCE,
+}
+
+
+def _force_fp16_sensitive_fp32(network):
+    """Force the FP16-sensitive layers (Softmax + fused/decomposed LayerNorm) to
+    FP32. Covers both the fused Normalization op and the Reduce + Pow form.
+    OBEY_PRECISION_CONSTRAINTS must be set on the config for this to take effect.
+    Returns the count of layers forced to FP32.
+    """
+    forced = 0
+    for i in range(network.num_layers):
+        layer = network.get_layer(i)
+        sensitive = layer.type in FP16_SENSITIVE_TYPES
+
+        # Decomposed LayerNorm variance: elementwise x^2.
+        if not sensitive and layer.type == trt.LayerType.ELEMENTWISE:
+            try:
+                sensitive = layer.op == trt.ElementWiseOperation.POW
+            except AttributeError:
+                pass
+
+        if sensitive:
+            layer.precision = trt.float32
+            for j in range(layer.num_outputs):
+                layer.set_output_type(j, trt.float32)
+            forced += 1
+    return forced
 
 
 def build_engine(onnx_path, engine_path, size=640, fp16=False, mixed=True,
@@ -64,18 +100,11 @@ def build_engine(onnx_path, engine_path, size=640, fp16=False, mixed=True,
             config.set_flag(trt.BuilderFlag.FP16)
             print("FP16 enabled.")
             if mixed:
-                # Keep attention Softmax / LayerNorm in FP32 (the FP16 fix).
+                # Keep Softmax and LayerNorm in FP32 (the FP16 fix).
                 config.set_flag(trt.BuilderFlag.OBEY_PRECISION_CONSTRAINTS)
-                forced = 0
-                for i in range(network.num_layers):
-                    layer = network.get_layer(i)
-                    if str(layer.type).split(".")[-1] in FP16_SENSITIVE:
-                        layer.precision = trt.float32
-                        for j in range(layer.num_outputs):
-                            layer.set_output_type(j, trt.float32)
-                        forced += 1
+                forced = _force_fp16_sensitive_fp32(network)
                 print(f"FP16 mixed precision: {forced} sensitive layers "
-                      f"({', '.join(sorted(FP16_SENSITIVE))}) forced to FP32.")
+                      f"(Softmax/LayerNorm) forced to FP32.")
             else:
                 print("Plain FP16 (--no-mixed): Softmax overflow, expect broken accuracy.")
         else:

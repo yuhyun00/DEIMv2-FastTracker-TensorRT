@@ -70,6 +70,27 @@ python pth2onnx.py -c configs/deimv2/deimv2_dinov3_s_coco.yml -r deimv2_s.pth --
 python3 export/onnx2trt.py --onnx deimv2_s.onnx --saveEngine deimv2_s.engine --fp16 --size 640
 ```
 
+#### 정밀도 옵션 (GPU에 따라 선택)
+
+`onnx2trt.py`는 DINOv3 특유의 정밀도 문제 두 가지를 자동으로 처리합니다: 기본 FP32
+경로는 TF32를 끄고, `--fp16`은 attention Softmax / LayerNorm을 FP32로 유지합니다
+(mixed precision). GPU 세대에 맞춰 플래그를 선택하세요:
+
+| GPU 세대 (예시) | 권장 플래그 | 비고 |
+|-----------------|-------------|------|
+| Ampere / Ada / Hopper (A6000, A100, RTX 3090, RTX 4090, H100) | `--fp16` | mixed precision; 정확한 FP32는 플래그 생략 |
+| **Blackwell 이상** (sm_100 / sm_120: B100, B200, RTX 5090, RTX PRO 6000 Blackwell) | **`--bf16`** | **이 세대 이상은 BF16 사용** |
+
+**Blackwell(sm_100 / sm_120) 이상 GPU에서는 `--bf16`을 사용하세요.** 이 세대에서는
+FP16·FP32 tactic이 sm_120의 버그 있는 fused-decoder 커널을 타서 D-FINE 디코더가
+손상됩니다(큰/누워있는 박스 누락). BF16 tactic은 이를 우회해 ONNX와 일치합니다. BF16은
+레이어별 강제가 필요 없으므로 `--fp16`과 **함께 쓰지 마세요.**
+
+```bash
+# Blackwell(sm_100 / sm_120) 이상: BF16 사용
+python3 export/onnx2trt.py --onnx deimv2_s.onnx --saveEngine deimv2_s.engine --bf16 --size 640
+```
+
 ### 2. 파이프라인 실행
 
 입력 폴더의 모든 이미지를 읽어 검출/추적 후 시각화 결과를 출력 폴더에 저장합니다.

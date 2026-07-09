@@ -72,6 +72,28 @@ python pth2onnx.py -c configs/deimv2/deimv2_dinov3_s_coco.yml -r deimv2_s.pth --
 python3 export/onnx2trt.py --onnx deimv2_s.onnx --saveEngine deimv2_s.engine --fp16 --size 640
 ```
 
+#### Precision options (pick by GPU)
+
+`onnx2trt.py` handles two DINOv3-specific accuracy pitfalls automatically: the
+default FP32 path disables TF32, and `--fp16` keeps the attention Softmax /
+LayerNorm in FP32 (mixed precision). Choose the flag by GPU generation:
+
+| GPU generation (example) | Recommended flag | Notes |
+|--------------------------|------------------|-------|
+| Ampere / Ada / Hopper (A6000, A100, RTX 3090, RTX 4090, H100) | `--fp16` | mixed precision; drop the flag for exact FP32 |
+| **Blackwell and newer** (sm_100 / sm_120: B100, B200, RTX 5090, RTX PRO 6000 Blackwell) | **`--bf16`** | **use BF16 on this generation and above** |
+
+**On Blackwell (sm_100 / sm_120) and newer GPUs, use `--bf16`.** There the FP16
+and FP32 tactics hit a buggy sm_120 fused-decoder kernel that corrupts the D-FINE
+decoder (drops large / lying-down boxes); the BF16 tactic routes around it and
+restores ONNX parity. BF16 needs no per-layer forcing, so do **not** combine it
+with `--fp16`.
+
+```bash
+# Blackwell (sm_100 / sm_120) and newer: use BF16
+python3 export/onnx2trt.py --onnx deimv2_s.onnx --saveEngine deimv2_s.engine --bf16 --size 640
+```
+
 ### 2. Run the pipeline
 
 Reads every image in the input folder, runs detection/tracking, and saves the

@@ -4,25 +4,10 @@ Build a TensorRT engine (.engine) from a DEIMv2 ONNX model.
 Uses the TensorRT Python API with an explicit-batch network and a dynamic-batch
 optimization profile (inputs: `images` [N,3,H,W] and `orig_target_sizes` [N,2]).
 
-Precision handling (DINOv3 backbone). Two independent sources of accuracy loss
-are avoided here so the engine matches the ONNX/PyTorch outputs:
-
-  * FP32 case -- TF32 is ON by default on Ampere+ GPUs (A6000/A100/30xx+) and
-    truncates the matmul mantissa to 10 bits. The DINOv3 backbone has "massive
-    activations" (a few very large values); TF32 rounds those, giving a small
-    mean but large, input-dependent max error. We clear BuilderFlag.TF32 to get
-    true FP32 (bit-exact with ONNX-Runtime). Pass --keep-tf32 to reproduce the bug.
-
-  * FP16 case -- plain FP16 is catastrophic (cosine ~0.91). Two transformer ops
-    overflow FP16 and must stay FP32; which one appears depends on how the ONNX
-    was exported, so we guard both:
-      - Softmax: attention logits are large and exp() saturates to inf. This is
-        the decisive one on opset>=17 exports (measured: Softmax->FP32 alone
-        recovers cosine 0.91 -> 0.9999; LayerNorm->FP32 alone does nothing).
-      - LayerNorm: the variance x^2 overflows FP16 after attention. On opset>=17
-        it is fused into a single Normalization layer; on opset<=16 it is
-        decomposed into Reduce + Pow, so we force Normalization, Reduce and Pow.
-    Pass --no-mixed to reproduce the broken result.
+Precision options for the DINOv3 backbone:
+  * FP32 (default) -- TF32 is cleared for a bit-exact match with ONNX-Runtime.
+  * FP16 (--fp16)  -- mixed precision; Softmax/LayerNorm are kept in FP32.
+  * BF16 (--bf16)  -- recommended on Blackwell; no per-layer forcing needed.
 
 Example:
     # Accurate FP32 (TF32 disabled):
@@ -37,10 +22,8 @@ import argparse
 
 import tensorrt as trt
 
-# Layer types kept in FP32 inside an FP16 engine for the DINOv3/ViT backbone.
-# SOFTMAX is the decisive one (attention exp() overflow). NORMALIZATION is the
-# fused LayerNorm (opset>=17); REDUCE covers the decomposed LayerNorm variance
-# (opset<=16). POW is the decomposed square and is matched separately below.
+# LayerNorm/Softmax layer types kept in FP32 inside an FP16 engine.
+# SOFTMAX + fused LayerNorm (NORMALIZATION); REDUCE/POW cover decomposed LayerNorm.
 FP16_SENSITIVE_TYPES = {
     trt.LayerType.SOFTMAX,
     trt.LayerType.NORMALIZATION,
@@ -49,11 +32,7 @@ FP16_SENSITIVE_TYPES = {
 
 
 def _force_fp16_sensitive_fp32(network):
-    """Force the FP16-sensitive layers (Softmax + fused/decomposed LayerNorm) to
-    FP32. Covers both the fused Normalization op and the Reduce + Pow form.
-    OBEY_PRECISION_CONSTRAINTS must be set on the config for this to take effect.
-    Returns the count of layers forced to FP32.
-    """
+    """Force Softmax/LayerNorm layers to FP32. Needs OBEY_PRECISION_CONSTRAINTS."""
     forced = 0
     for i in range(network.num_layers):
         layer = network.get_layer(i)
@@ -75,7 +54,7 @@ def _force_fp16_sensitive_fp32(network):
 
 
 def build_engine(onnx_path, engine_path, size=640, fp16=False, mixed=True,
-                 keep_tf32=False, min_batch=1, opt_batch=1, max_batch=1,
+                 keep_tf32=False, bf16=False, min_batch=1, opt_batch=1, max_batch=1,
                  workspace_gb=4):
     logger = trt.Logger(trt.Logger.INFO)
     trt.init_libnvinfer_plugins(logger, "")
@@ -95,22 +74,27 @@ def build_engine(onnx_path, engine_path, size=640, fp16=False, mixed=True,
     config = builder.create_builder_config()
     config.set_memory_pool_limit(trt.MemoryPoolType.WORKSPACE, workspace_gb << 30)
 
-    if fp16:
+    if bf16:
+        # BF16 for Blackwell: dodges the sm_120 fp16/fp32 decoder-kernel bug.
+        # Do NOT also set FP16, or TRT re-picks the buggy fast kernel.
+        config.set_flag(trt.BuilderFlag.BF16)
+        print("BF16 enabled (Blackwell-safe: no layer forcing needed).")
+    elif fp16:
         if builder.platform_has_fast_fp16:
             config.set_flag(trt.BuilderFlag.FP16)
             print("FP16 enabled.")
             if mixed:
-                # Keep Softmax and LayerNorm in FP32 (the FP16 fix).
+                # Keep Softmax/LayerNorm in FP32 (avoids FP16 attention overflow).
                 config.set_flag(trt.BuilderFlag.OBEY_PRECISION_CONSTRAINTS)
                 forced = _force_fp16_sensitive_fp32(network)
                 print(f"FP16 mixed precision: {forced} sensitive layers "
                       f"(Softmax/LayerNorm) forced to FP32.")
             else:
-                print("Plain FP16 (--no-mixed): Softmax overflow, expect broken accuracy.")
+                print("Plain FP16 (--no-mixed): expect broken accuracy.")
         else:
             print("FP16 requested but not supported on this platform; using FP32.")
     else:
-        # FP32 path: disable TF32 for bit-exact match with ONNX (the FP32 fix).
+        # FP32: clear TF32 for a bit-exact match with ONNX.
         if keep_tf32:
             print("TF32 kept (--keep-tf32): expect accuracy loss on DINOv3 backbone.")
         else:
@@ -149,6 +133,8 @@ if __name__ == "__main__":
     parser.add_argument("--saveEngine", required=True, help="output .engine path")
     parser.add_argument("--size", type=int, default=640, help="square input size (must match ONNX)")
     parser.add_argument("--fp16", action="store_true", help="enable FP16 precision (mixed by default)")
+    parser.add_argument("--bf16", action="store_true",
+                        help="enable BF16 precision (recommended on Blackwell)")
     parser.add_argument("--no-mixed", dest="mixed", action="store_false",
                         help="with --fp16: plain FP16, reproduces the broken result")
     parser.add_argument("--keep-tf32", action="store_true",
@@ -166,6 +152,7 @@ if __name__ == "__main__":
         fp16=args.fp16,
         mixed=args.mixed,
         keep_tf32=args.keep_tf32,
+        bf16=args.bf16,
         min_batch=args.min_batch,
         opt_batch=args.opt_batch,
         max_batch=args.max_batch,
